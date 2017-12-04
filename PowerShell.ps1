@@ -93,7 +93,7 @@ ForEach ($GUID in $PlexShows.Keys) {
         if ($Episode.airedSeason -eq 0 -or $Episode.dvdSeason -eq 0) { continue }
         if (-not $Episode.firstAired) { continue }
         if ((Get-Date).AddDays(-1) -lt (Get-Date $Episode.firstAired)) { continue }
-        if ((-not $PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName) -and (-not $Episode.dvdSeason -or ($Episode.dvdSeason -and (-not $PlexShows[$GUID]["seasons"][$Episode.dvdSeason.ToString()].Values -contains $Episode.episodeName)))) {
+        if ((-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) -and (-not $Episode.dvdSeason -or ($Episode.dvdSeason -and (-not ($PlexShows[$GUID]["seasons"][$Episode.dvdSeason.ToString()].Values -contains $Episode.episodeName))))) {
             if (-not $Missing.ContainsKey($PlexShows[$GUID]["title"])) {
                 $Missing[$PlexShows[$GUID]["title"]] = New-Object System.Collections.ArrayList
             }
