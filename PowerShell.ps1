@@ -84,8 +84,15 @@ ForEach ($GUID in $PlexShows.Keys) {
 # Missing Episodes
 $Missing = @{}
 ForEach ($GUID in $PlexShows.Keys) {
+    $Page = 1
     try {
-        $Episodes = (Invoke-RestMethod -Uri "https://api.thetvdb.com/series/$GUID/episodes" -Headers $Headers).data
+        $Results = (Invoke-RestMethod -Uri "https://api.thetvdb.com/series/$GUID/episodes?page=$page" -Headers $Headers)
+        $Episodes = $Results.data
+        while ($Page -lt $Results.links.last) {
+            $Page++
+            $Results = (Invoke-RestMethod -Uri "https://api.thetvdb.com/series/$GUID/episodes?page=$page" -Headers $Headers)
+            $Episodes += $Results.data
+        }
     } catch {
         $Episodes = $null
     }
