@@ -71,7 +71,7 @@ ForEach ($GUID in $PlexShows.Keys) {
         $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves").MediaContainer.Video
         $Seasons = $Episodes.parentIndex | Sort | Unique
         ForEach ($Season in $Seasons) {
-            if (-not $PlexShows[$GUID]["seasons"].ContainsValue($Season)) {
+            if (-not $PlexShows[$GUID]["seasons"] -contains $Season) {
                 $PlexShows[$GUID]["seasons"][$Season] = New-Object System.Collections.ArrayList
             }
         }
