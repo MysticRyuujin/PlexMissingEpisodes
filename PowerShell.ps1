@@ -97,28 +97,28 @@ ForEach ($GUID in $PlexShows.Keys) {
         $Episodes = $null
     }
     ForEach ($Episode in $Episodes) {
-        if ($Episode.airedSeason -eq 0 -or $Episode.dvdSeason -eq 0) { continue }
+        if ($Episode.airedSeason -eq 0) { continue }
         if (-not $Episode.firstAired) { continue }
         if ((Get-Date).AddDays(-1) -lt (Get-Date $Episode.firstAired)) { continue }
-        if ((-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) -and (-not $Episode.dvdSeason -or ($Episode.dvdSeason -and (-not ($PlexShows[$GUID]["seasons"][$Episode.dvdSeason.ToString()].Values -contains $Episode.episodeName))))) {
-            if (-not $Missing.ContainsKey($PlexShows[$GUID]["title"])) {
-                $Missing[$PlexShows[$GUID]["title"]] = New-Object System.Collections.ArrayList
-            }
-            [void]$Missing[$PlexShows[$GUID]["title"]].Add(@{
-                "airedSeason" = $Episode.airedSeason.ToString()
-                "airedEpisodeNumber" = $Episode.airedEpisodeNumber.ToString()
-                "dvdSeason" = if ($Episode.dvdSeason) { $Episode.dvdSeason.ToString() } else { $null }
-                "dvdEpisodeNumber" = if ($Episode.dvdEpisodeNumber) { $Episode.dvdEpisodeNumber.ToString() } else { $null }
-                "episodeName" = $Episode.episodeName
-            })
+        if (-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) {
+	    if (-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
+                if (-not $Missing.ContainsKey($PlexShows[$GUID]["title"])) {
+                    $Missing[$PlexShows[$GUID]["title"]] = New-Object System.Collections.ArrayList
+                }
+                [void]$Missing[$PlexShows[$GUID]["title"]].Add(@{
+                    "airedSeason" = $Episode.airedSeason.ToString()
+                    "airedEpisodeNumber" = $Episode.airedEpisodeNumber.ToString()
+                    "episodeName" = $Episode.episodeName
+                })
+	    }
         }
     }
 }
 
 ForEach ($Show in $Missing.Keys) {
-    $Seasons = ($Missing[$Show].airedSeason + $Missing[$Show].dvdSeason) | Sort | Unique
+    $Seasons = $Missing[$Show].airedSeason | Sort | Unique
     ForEach ($Season in $Seasons) {
-        $Episodes = $Missing[$Show] | ? { $_.airedSeason -eq $Season -or $_.dvdSeason -eq $Season }
+        $Episodes = $Missing[$Show] | ? { $_.airedSeason -eq $Season }
         ForEach ($Episode in $Episodes) {
             "{0} S{1:00}E{2:00} - {3}" -f $Show,[int]$Season,[int]$Episode.airedEpisodeNumber,$Episode.episodeName
         }
