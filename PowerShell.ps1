@@ -145,9 +145,8 @@ ForEach ($GUID in $PlexShows.Keys) {
     }
 }
 
-ForEach ($Show in $Missing.Keys) {
-    $Seasons = $Missing[$Show].airedSeason | Sort -Unique
-    ForEach ($Season in $Seasons) {
+ForEach ($Show in ($Missing.Keys | Sort)) {
+    ForEach ($Season in ($Missing[$Show].airedSeason | Sort -Unique)) {
         $Episodes = $Missing[$Show] | ? { $_.airedSeason -eq $Season }
         ForEach ($Episode in $Episodes) {
             "{0} S{1:00}E{2:00} - {3}" -f $Show,[int]$Season,[int]$Episode.airedEpisodeNumber,$Episode.episodeName
