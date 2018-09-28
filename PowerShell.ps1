@@ -10,6 +10,13 @@ $PlexServer = "http://localhost:32400"
 $PlexUsername = ''
 $PlexPassword = ''
 
+# Array of show names to ignore, examples included
+$IgnoreList = @(
+    #"The Big Bang Theory"
+    #"Dirty Jobs"
+    #"Street Outlaws"
+)
+
 # Ignore Plex Certificate Issues
 if ($PlexServer -match "https") {
     add-type "using System.Net; using System.Security.Cryptography.X509Certificates; public class TrustAllCertsPolicy : ICertificatePolicy { public bool CheckValidationResult(ServicePoint srvPoint, X509Certificate certificate, WebRequest request, int certificateProblem) { return true; } }"
@@ -66,7 +73,9 @@ $RatingKeys = New-Object System.Collections.ArrayList
 ForEach ($TVKey in $TVKeys) {
     $SeriesInfo = (Invoke-RestMethod -Uri "$PlexServer/library/sections/$TVKey/all/" -Headers $PlexHeaders).MediaContainer.Directory
     ForEach ($Series in $SeriesInfo) {
-        [void]$RatingKeys.Add($Series.ratingKey)
+        if (-not $IgnoreList.Contains($Series.title)) {
+            [void]$RatingKeys.Add($Series.ratingKey)
+        }
     }
 }
 $RatingKeys = $RatingKeys | Sort -Unique
