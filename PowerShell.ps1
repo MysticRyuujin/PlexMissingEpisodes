@@ -107,12 +107,18 @@ ForEach ($GUID in $PlexShows.Keys) {
         $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves" -Headers $PlexHeaders).MediaContainer.Video
         $Seasons = $Episodes.parentIndex | Sort -Unique
         ForEach ($Season in $Seasons) {
-            if (-not ($PlexShows[$GUID]["seasons"] -contains $Season)) {
+            if (!($PlexShows[$GUID]["seasons"] -contains $Season)) {
                 $PlexShows[$GUID]["seasons"][$Season] = New-Object System.Collections.ArrayList
             }
         }
         ForEach ($Episode in $Episodes) {
-            [void]$PlexShows[$GUID]["seasons"][$Episode.parentIndex].Add(@{$Episode.index = $Episode.title})
+            if ((!$Episode.parentIndex) -or (!$Episode.index)) {
+                Write-Host -ForegroundColor Red "Missing parentIndex or index"
+                Write-Host $PlexShows[$GUID]
+                Write-Host $Episode
+            } else {
+                [void]$PlexShows[$GUID]["seasons"][$Episode.parentIndex].Add(@{$Episode.index = $Episode.title})
+            }
         }
     }
 }
@@ -137,11 +143,11 @@ ForEach ($GUID in $PlexShows.Keys) {
     }
     ForEach ($Episode in $Episodes) {
         if ($Episode.airedSeason -eq 0) { continue }
-        if (-not $Episode.firstAired) { continue }
+        if (!$Episode.firstAired) { continue }
         if ((Get-Date).AddDays(-1) -lt (Get-Date $Episode.firstAired)) { continue }
-        if (-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) {
-	    if (-not ($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
-                if (-not $Missing.ContainsKey($PlexShows[$GUID]["title"])) {
+        if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) {
+	    if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
+                if (!$Missing.ContainsKey($PlexShows[$GUID]["title"])) {
                     $Missing[$PlexShows[$GUID]["title"]] = New-Object System.Collections.ArrayList
                 }
                 [void]$Missing[$PlexShows[$GUID]["title"]].Add(@{
