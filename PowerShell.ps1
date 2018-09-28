@@ -41,7 +41,7 @@ $PlexHeaders.Add("X-Plex-Version","V1")
 try {
     $PlexToken = (Invoke-RestMethod -Uri 'https://plex.tv/users/sign_in.json' -Method Post -Headers $PlexHeaders).user.authToken
     $PlexHeaders.Add("X-Plex-Token",$PlexToken)
-    $PlexHeaders.Remove("Authorization")
+    [void]$PlexHeaders.Remove("Authorization")
 } catch {
     Write-Host -ForegroundColor Red "Failed to get Plex Auth Token:"
     Write-Host -ForegroundColor Red $_
