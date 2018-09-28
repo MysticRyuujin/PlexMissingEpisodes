@@ -82,8 +82,11 @@ $RatingKeys = $RatingKeys | Sort -Unique
 
 # Get all Show Data
 $PlexShows = @{}
+$Progress = 0
 ForEach ($RatingKey in $RatingKeys) {
     $ShowData = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/" -Headers $PlexHeaders).MediaContainer.Directory
+    $Progress++
+    Write-Progress -Activity "Collecting Show Data" -Status $ShowData.title -PercentComplete ($Progress / $RatingKeys.Count * 100)
     $GUID = $ShowData.guid -replace ".*//(\d+).*",'$1'
     if ($PlexShows.ContainsKey($GUID)) {
         [void]$PlexShows[$GUID]["ratingKeys"].Add($RatingKey)
@@ -96,7 +99,10 @@ ForEach ($RatingKey in $RatingKeys) {
         [void]$PlexShows[$GUID]["ratingKeys"].Add($ShowData.ratingKey)
     }
 }
+$Progress = 0
 ForEach ($GUID in $PlexShows.Keys) {
+    $Progress++
+    Write-Progress -Activity "Collecting Season Data" -Status $PlexShows[$GUID]["title"] -PercentComplete ($Progress / $PlexShows.Count * 100)
     ForEach ($RatingKey in $PlexShows[$GUID]["ratingKeys"]) {
         $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves" -Headers $PlexHeaders).MediaContainer.Video
         $Seasons = $Episodes.parentIndex | Sort -Unique
@@ -113,7 +119,10 @@ ForEach ($GUID in $PlexShows.Keys) {
 
 # Missing Episodes
 $Missing = @{}
+$Progress = 0
 ForEach ($GUID in $PlexShows.Keys) {
+    $Progress++
+    Write-Progress -Activity "Collecting Episode Data from TheTVDB" -Status $PlexShows[$GUID]["title"] -PercentComplete ($Progress / $PlexShows.Count * 100)
     $Page = 1
     try {
         $Results = (Invoke-RestMethod -Uri "https://api.thetvdb.com/series/$GUID/episodes?page=$page" -Headers $TVDBHeaders)
