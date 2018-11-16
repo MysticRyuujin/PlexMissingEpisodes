@@ -78,7 +78,7 @@ ForEach ($TVKey in $TVKeys) {
         }
     }
 }
-$RatingKeys = $RatingKeys | Sort -Unique
+$RatingKeys = $RatingKeys | Sort-Object -Unique
 
 # Get all Show Data
 $PlexShows = @{}
@@ -105,7 +105,7 @@ ForEach ($GUID in $PlexShows.Keys) {
     Write-Progress -Activity "Collecting Season Data" -Status $PlexShows[$GUID]["title"] -PercentComplete ($Progress / $PlexShows.Count * 100)
     ForEach ($RatingKey in $PlexShows[$GUID]["ratingKeys"]) {
         $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves" -Headers $PlexHeaders).MediaContainer.Video
-        $Seasons = $Episodes.parentIndex | Sort -Unique
+        $Seasons = $Episodes.parentIndex | Sort-Object -Unique
         ForEach ($Season in $Seasons) {
             if (!($PlexShows[$GUID]["seasons"] -contains $Season)) {
                 $PlexShows[$GUID]["seasons"][$Season] = New-Object System.Collections.ArrayList
@@ -160,8 +160,8 @@ ForEach ($GUID in $PlexShows.Keys) {
     }
 }
 
-ForEach ($Show in ($Missing.Keys | Sort)) {
-    ForEach ($Season in ($Missing[$Show].airedSeason | Sort -Unique)) {
+ForEach ($Show in ($Missing.Keys | Sort-Object)) {
+    ForEach ($Season in ($Missing[$Show].airedSeason | Sort-Object -Unique)) {
         $Episodes = $Missing[$Show] | ? { $_.airedSeason -eq $Season }
         ForEach ($Episode in $Episodes) {
             "{0} S{1:00}E{2:00} - {3}" -f $Show,[int]$Season,[int]$Episode.airedEpisodeNumber,$Episode.episodeName
