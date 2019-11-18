@@ -142,8 +142,9 @@ ForEach ($GUID in $PlexShows.Keys) {
         $Episodes = $null
     }
     ForEach ($Episode in $Episodes) {
-        if ($Episode.airedSeason -eq 0) { continue }
-        if (!$Episode.firstAired) { continue }
+        if ($Episode.airedSeason -eq 0) { continue } # Ignore Season 0 / Specials
+        if (!$Episode.firstAired) { continue } # Ignore unaired
+        if (!$Episode.airedSeason) { continue } # Ignore episodes with blank airedSeasons (#11)
         if ((Get-Date).AddDays(-1) -lt (Get-Date $Episode.firstAired)) { continue }
         if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) {
 	    if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
