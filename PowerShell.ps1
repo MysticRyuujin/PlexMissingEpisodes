@@ -57,7 +57,7 @@ try {
 
 # Try to get the Library IDs for TV Shows
 try {
-    $TVKeys = ((Invoke-RestMethod -Uri "$PlexServer/library/sections" -Headers $PlexHeaders).MediaContainer.Directory | ? { $_.type -eq "show" }).key
+    $TVKeys = ((Invoke-RestMethod -Uri "$PlexServer/library/sections" -Headers $PlexHeaders).MediaContainer.Directory | Where-Object { $_.type -eq "show" }).key
 } catch {
     Write-Host -ForegroundColor Red "Failed to get Plex Library Sections:"
     if ($_.Exception.Response.StatusDescription -eq "Unauthorized") {
@@ -69,7 +69,7 @@ try {
 }
 
 # Get all RatingKeys
-$RatingKeys = New-Object System.Collections.ArrayList
+$RatingKeys = [System.Collections.Generic.List[int]]::new()
 ForEach ($TVKey in $TVKeys) {
     $SeriesInfo = (Invoke-RestMethod -Uri "$PlexServer/library/sections/$TVKey/all/" -Headers $PlexHeaders).MediaContainer.Directory
     ForEach ($Series in $SeriesInfo) {
@@ -93,12 +93,14 @@ ForEach ($RatingKey in $RatingKeys) {
     } else {
         [void]$PlexShows.Add($GUID,@{
             "title" = $ShowData.title
-            "ratingKeys" = New-Object System.Collections.ArrayList
+            "ratingKeys" = [System.Collections.Generic.List[int]]::new()
             "seasons" = @{}
         })
         [void]$PlexShows[$GUID]["ratingKeys"].Add($ShowData.ratingKey)
     }
 }
+
+# Get Season data from Show Data
 $Progress = 0
 ForEach ($GUID in $PlexShows.Keys) {
     $Progress++
@@ -108,7 +110,7 @@ ForEach ($GUID in $PlexShows.Keys) {
         $Seasons = $Episodes.parentIndex | Sort-Object -Unique
         ForEach ($Season in $Seasons) {
             if (!($PlexShows[$GUID]["seasons"] -contains $Season)) {
-                $PlexShows[$GUID]["seasons"][$Season] = New-Object System.Collections.ArrayList
+                $PlexShows[$GUID]["seasons"][$Season] = [System.Collections.Generic.List[hashtable]]::new()
             }
         }
         ForEach ($Episode in $Episodes) {
@@ -147,23 +149,23 @@ ForEach ($GUID in $PlexShows.Keys) {
         if (!$Episode.airedSeason) { continue } # Ignore episodes with blank airedSeasons (#11)
         if ((Get-Date).AddDays(-1) -lt (Get-Date $Episode.firstAired)) { continue }
         if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Values -contains $Episode.episodeName)) {
-	    if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
+	        if (!($PlexShows[$GUID]["seasons"][$Episode.airedSeason.ToString()].Keys -contains $Episode.airedEpisodeNumber)) {
                 if (!$Missing.ContainsKey($PlexShows[$GUID]["title"])) {
-                    $Missing[$PlexShows[$GUID]["title"]] = New-Object System.Collections.ArrayList
+                    $Missing[$PlexShows[$GUID]["title"]] = [System.Collections.Generic.List[hashtable]]::new()
                 }
                 [void]$Missing[$PlexShows[$GUID]["title"]].Add(@{
                     "airedSeason" = $Episode.airedSeason.ToString()
                     "airedEpisodeNumber" = $Episode.airedEpisodeNumber.ToString()
                     "episodeName" = $Episode.episodeName
                 })
-	    }
+	        }
         }
     }
 }
 
 ForEach ($Show in ($Missing.Keys | Sort-Object)) {
     ForEach ($Season in ($Missing[$Show].airedSeason | Sort-Object -Unique)) {
-        $Episodes = $Missing[$Show] | ? { $_.airedSeason -eq $Season }
+        $Episodes = $Missing[$Show] | Where-Object { $_.airedSeason -eq $Season }
         ForEach ($Episode in $Episodes) {
             "{0} S{1:00}E{2:00} - {3}" -f $Show,[int]$Season,[int]$Episode.airedEpisodeNumber,$Episode.episodeName
         }
