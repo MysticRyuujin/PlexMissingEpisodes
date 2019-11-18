@@ -1,7 +1,7 @@
 # TheTVDB Authentication Information
 $TheTVDBAuthentication = @{
     "apikey" = ""
-    "userkey" = "" # Account Identifier
+    "userkey" = "" # Unique User Key
     "username" = ""
 }
 
