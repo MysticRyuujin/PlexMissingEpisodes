@@ -35,7 +35,10 @@ param(
     [string[]]$IgnoreShows,
     
     [Parameter(HelpMessage = "Output file path to save results (optional - if not specified, output goes to console)")]
-    [string]$OutputFile
+    [string]$OutputFile,
+    
+    [Parameter(HelpMessage = "Use simple output format: Show Name (Year) - SXXEXX - Title")]
+    [switch]$SimpleOutput
 )
 
 # ============================================================================
@@ -265,6 +268,7 @@ try {
             else {
                 [void]$PlexShows.Add($GUID, @{
                         "title"      = $ShowData.title
+                        "year"       = if ($ShowData.year -and $ShowData.year -ne $null -and $ShowData.year -ne "") { $ShowData.year } else { $null }
                         "ratingKeys" = [System.Collections.Generic.List[int]]::new()
                         "seasons"    = @{ }
                     }
@@ -471,62 +475,94 @@ try {
 
     # Build the output content
     $OutputContent = @()
-    $OutputContent += "=== MISSING EPISODES REPORT ==="
-    $OutputContent += "Generated on: $(Get-Date)"
-    $OutputContent += ""
     
-    if ($Missing.Keys.Count -eq 0) {
-        $OutputContent += "No missing episodes found! All shows are up to date."
-    }
-    else {
-        $OutputContent += "Found missing episodes in $($Missing.Keys.Count) show(s):"
-        $OutputContent += ""
-        
-        ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-            $ShowMissing = $Missing[$Show]
-            $TotalShowMissing = $ShowMissing.Count
-            
-            $OutputContent += $Show
-            $OutputContent += "  Total missing episodes: $TotalShowMissing"
-            
-            # Group by season for summary
-            $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
-            $OutputContent += "  Missing episodes by season:"
-            
-            ForEach ($SeasonGroup in $SeasonSummary) {
-                $SeasonNum = $SeasonGroup.Name
-                $EpisodeCount = $SeasonGroup.Count
-                $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
-                $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+    if ($SimpleOutput) {
+        # Simple output format: Show Name (Year) - SXXEXX - Title
+        if ($Missing.Keys.Count -eq 0) {
+            $OutputContent += "No missing episodes found! All shows are up to date."
+        }
+        else {
+            ForEach ($Show in ($Missing.Keys | Sort-Object)) {
+                $ShowMissing = $Missing[$Show]
                 
-                if ($EpisodeCount -le 10) {
-                    $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes"
-                    ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
-                        $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                # Find the GUID for this show to get year information
+                $ShowGUID = $null
+                ForEach ($GUID in $PlexShows.Keys) {
+                    if ($PlexShows[$GUID]["title"] -eq $Show) {
+                        $ShowGUID = $GUID
+                        break
                     }
                 }
-                else {
-                    $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)"
+                
+                    # Format show name with year if available
+                    $ShowNameWithYear = $Show
+                    if ($ShowGUID -and $PlexShows[$ShowGUID] -and $PlexShows[$ShowGUID]["year"] -and $PlexShows[$ShowGUID]["year"] -ne $null) {
+                        $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
+                    }                ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
+                    $OutputContent += ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, [int]$Episode.airedSeason, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                }
+            }
+        }
+    }
+    else {
+        # Standard detailed output format
+        $OutputContent += "=== MISSING EPISODES REPORT ==="
+        $OutputContent += "Generated on: $(Get-Date)"
+        $OutputContent += ""
+        
+        if ($Missing.Keys.Count -eq 0) {
+            $OutputContent += "No missing episodes found! All shows are up to date."
+        }
+        else {
+            $OutputContent += "Found missing episodes in $($Missing.Keys.Count) show(s):"
+            $OutputContent += ""
+            
+            ForEach ($Show in ($Missing.Keys | Sort-Object)) {
+                $ShowMissing = $Missing[$Show]
+                $TotalShowMissing = $ShowMissing.Count
+                
+                $OutputContent += $Show
+                $OutputContent += "  Total missing episodes: $TotalShowMissing"
+                
+                # Group by season for summary
+                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
+                $OutputContent += "  Missing episodes by season:"
+                
+                ForEach ($SeasonGroup in $SeasonSummary) {
+                    $SeasonNum = $SeasonGroup.Name
+                    $EpisodeCount = $SeasonGroup.Count
+                    $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
+                    $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
                     
-                    # Show first 3 and last 3 episodes for large seasons
-                    $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
-                    $FirstThree = $SortedEpisodes | Select-Object -First 3
-                    $LastThree = $SortedEpisodes | Select-Object -Last 3
-                    
-                    ForEach ($Episode in $FirstThree) {
-                        $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
-                    }
-                    if ($EpisodeCount -gt 6) {
-                        $OutputContent += "      ... ($($EpisodeCount - 6) more episodes) ..."
-                    }
-                    if ($EpisodeCount -gt 3) {
-                        ForEach ($Episode in $LastThree) {
+                    if ($EpisodeCount -le 10) {
+                        $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes"
+                        ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
                             $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
                         }
                     }
+                    else {
+                        $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)"
+                        
+                        # Show first 3 and last 3 episodes for large seasons
+                        $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
+                        $FirstThree = $SortedEpisodes | Select-Object -First 3
+                        $LastThree = $SortedEpisodes | Select-Object -Last 3
+                        
+                        ForEach ($Episode in $FirstThree) {
+                            $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                        }
+                        if ($EpisodeCount -gt 6) {
+                            $OutputContent += "      ... ($($EpisodeCount - 6) more episodes) ..."
+                        }
+                        if ($EpisodeCount -gt 3) {
+                            ForEach ($Episode in $LastThree) {
+                                $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                            }
+                        }
+                    }
                 }
+                $OutputContent += ""
             }
-            $OutputContent += ""
         }
         
         $TotalMissing = ($Missing.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
@@ -536,10 +572,10 @@ try {
             $OutputContent += ""
             $OutputContent += "Note: Results filtered for shows matching '$SingleShowFilter'"
         }
+        
+        $OutputContent += ""
+        $OutputContent += "=== END REPORT ==="
     }
-    
-    $OutputContent += ""
-    $OutputContent += "=== END REPORT ==="
     
     # Output to file or console
     if (-not [string]::IsNullOrWhiteSpace($OutputFile)) {
@@ -561,72 +597,104 @@ try {
         # Clear progress bar before console output
         Write-Progress -Activity "Completed" -Completed
         
-        # Output to console with colors
-        Write-Host "`n=== MISSING EPISODES REPORT ===" -ForegroundColor Yellow
-        Write-Host "Generated on: $(Get-Date)" -ForegroundColor Gray
-
-        if ($Missing.Keys.Count -eq 0) {
-            Write-Host "`nNo missing episodes found! All shows are up to date." -ForegroundColor Green
-        }
-        else {
-            Write-Host "`nFound missing episodes in $($Missing.Keys.Count) show(s):`n" -ForegroundColor Red
-            
-            ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-                $ShowMissing = $Missing[$Show]
-                $TotalShowMissing = $ShowMissing.Count
-                
-                Write-Host "$Show" -ForegroundColor Cyan
-                Write-Host "  Total missing episodes: $TotalShowMissing" -ForegroundColor Yellow
-                
-                # Group by season for summary
-                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
-                Write-Host "  Missing episodes by season:" -ForegroundColor Gray
-                
-                ForEach ($SeasonGroup in $SeasonSummary) {
-                    $SeasonNum = $SeasonGroup.Name
-                    $EpisodeCount = $SeasonGroup.Count
-                    $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
-                    $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+        if ($SimpleOutput) {
+            # Simple output format for console
+            if ($Missing.Keys.Count -eq 0) {
+                Write-Host "No missing episodes found! All shows are up to date." -ForegroundColor Green
+            }
+            else {
+                ForEach ($Show in ($Missing.Keys | Sort-Object)) {
+                    $ShowMissing = $Missing[$Show]
                     
-                    if ($EpisodeCount -le 10) {
-                        Write-Host "    Season $SeasonNum`: $EpisodeCount episodes" -ForegroundColor Gray
-                        ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
-                            Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                    # Find the GUID for this show to get year information
+                    $ShowGUID = $null
+                    ForEach ($GUID in $PlexShows.Keys) {
+                        if ($PlexShows[$GUID]["title"] -eq $Show) {
+                            $ShowGUID = $GUID
+                            break
                         }
                     }
-                    else {
-                        Write-Host "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)" -ForegroundColor Gray
+                    
+                    # Format show name with year if available
+                    $ShowNameWithYear = $Show
+                    if ($ShowGUID -and $PlexShows[$ShowGUID] -and $PlexShows[$ShowGUID]["year"] -and $PlexShows[$ShowGUID]["year"] -ne $null) {
+                        $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
+                    }
+                    
+                    ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
+                        Write-Host ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, [int]$Episode.airedSeason, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor White
+                    }
+                }
+            }
+        }
+        else {
+            # Standard detailed output format for console
+            Write-Host "`n=== MISSING EPISODES REPORT ===" -ForegroundColor Yellow
+            Write-Host "Generated on: $(Get-Date)" -ForegroundColor Gray
+
+            if ($Missing.Keys.Count -eq 0) {
+                Write-Host "`nNo missing episodes found! All shows are up to date." -ForegroundColor Green
+            }
+            else {
+                Write-Host "`nFound missing episodes in $($Missing.Keys.Count) show(s):`n" -ForegroundColor Red
+                
+                ForEach ($Show in ($Missing.Keys | Sort-Object)) {
+                    $ShowMissing = $Missing[$Show]
+                    $TotalShowMissing = $ShowMissing.Count
+                    
+                    Write-Host "$Show" -ForegroundColor Cyan
+                    Write-Host "  Total missing episodes: $TotalShowMissing" -ForegroundColor Yellow
+                    
+                    # Group by season for summary
+                    $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
+                    Write-Host "  Missing episodes by season:" -ForegroundColor Gray
+                    
+                    ForEach ($SeasonGroup in $SeasonSummary) {
+                        $SeasonNum = $SeasonGroup.Name
+                        $EpisodeCount = $SeasonGroup.Count
+                        $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
+                        $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
                         
-                        # Show first 3 and last 3 episodes for large seasons
-                        $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
-                        $FirstThree = $SortedEpisodes | Select-Object -First 3
-                        $LastThree = $SortedEpisodes | Select-Object -Last 3
-                        
-                        ForEach ($Episode in $FirstThree) {
-                            Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
-                        }
-                        if ($EpisodeCount -gt 6) {
-                            Write-Host "      ... ($($EpisodeCount - 6) more episodes) ..." -ForegroundColor DarkGray
-                        }
-                        if ($EpisodeCount -gt 3) {
-                            ForEach ($Episode in $LastThree) {
+                        if ($EpisodeCount -le 10) {
+                            Write-Host "    Season $SeasonNum`: $EpisodeCount episodes" -ForegroundColor Gray
+                            ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
                                 Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
                             }
                         }
+                        else {
+                            Write-Host "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)" -ForegroundColor Gray
+                            
+                            # Show first 3 and last 3 episodes for large seasons
+                            $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
+                            $FirstThree = $SortedEpisodes | Select-Object -First 3
+                            $LastThree = $SortedEpisodes | Select-Object -Last 3
+                            
+                            ForEach ($Episode in $FirstThree) {
+                                Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                            }
+                            if ($EpisodeCount -gt 6) {
+                                Write-Host "      ... ($($EpisodeCount - 6) more episodes) ..." -ForegroundColor DarkGray
+                            }
+                            if ($EpisodeCount -gt 3) {
+                                ForEach ($Episode in $LastThree) {
+                                    Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                                }
+                            }
+                        }
                     }
+                    Write-Host ""
                 }
-                Write-Host ""
+                
+                $TotalMissing = ($Missing.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+                Write-Host "Total missing episodes across all shows: $TotalMissing" -ForegroundColor Yellow
+                
+                if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
+                    Write-Host "`nNote: Results filtered for shows matching '$SingleShowFilter'" -ForegroundColor Cyan
+                }
             }
             
-            $TotalMissing = ($Missing.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
-            Write-Host "Total missing episodes across all shows: $TotalMissing" -ForegroundColor Yellow
-            
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                Write-Host "`nNote: Results filtered for shows matching '$SingleShowFilter'" -ForegroundColor Cyan
-            }
+            Write-Host "`n=== END REPORT ===" -ForegroundColor Yellow
         }
-        
-        Write-Host "`n=== END REPORT ===" -ForegroundColor Yellow
     }
 
 }
