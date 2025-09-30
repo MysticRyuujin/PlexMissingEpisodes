@@ -241,8 +241,14 @@ try {
         $GUID = $null
         
         # Try to extract TVDB ID from new agent XML format
-        if ([string]$ShowData.InnerXml -match '<Guid id="tvdb://(\d+)"') {
-            $GUID = $matches[1]
+        try {
+            $xml = [xml]$ShowData.InnerXml
+            $tvdbGuid = $xml.SelectNodes("//Guid") | Where-Object { $_.id -like "tvdb://*" }
+            if ($tvdbGuid -and $tvdbGuid.id) {
+                $GUID = $tvdbGuid.id -replace "tvdb://", ""
+            }
+        } catch {
+            # Fallback: leave $GUID as $null
         }
         # Fallback to old format
         elseif ($ShowData.guid) {
@@ -250,7 +256,7 @@ try {
         }
         
         # Only process if we have a valid numeric GUID and valid ShowData
-        if ($GUID -match '^[\d\.]+$' -and $ShowData -and $ShowData.title) {
+        if ($GUID -match '^\d+$' -and $ShowData -and $ShowData.title) {
             if ($PlexShows.ContainsKey($GUID)) {
                 if ($PlexShows[$GUID]["ratingKeys"]) {
                     [void]$PlexShows[$GUID]["ratingKeys"].Add($RatingKey)
@@ -411,7 +417,7 @@ try {
             
             ForEach ($Episode in $Episodes) {
                 # API v4 uses different field names: seasonNumber instead of airedSeason, number instead of airedEpisodeNumber, name instead of episodeName
-                if (!$Episode.seasonNumber -and $Episode.seasonNumber -ne 0) { continue } # Ignore episodes with blank seasons (#11)
+                if ($null -eq $Episode.seasonNumber) { continue } # Ignore episodes with blank seasons (#11)
                 if ($Episode.seasonNumber -eq 0) { continue } # Ignore Season 0 / Specials
                 if (!$Episode.aired) { continue } # Ignore unaired episodes (API v4 uses 'aired' instead of 'firstAired')
                 
