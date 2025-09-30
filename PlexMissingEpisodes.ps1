@@ -242,17 +242,17 @@ try {
         
         # Try to extract TVDB ID from new agent XML format
         try {
-            $xml = [xml]$ShowData.InnerXml
-            $tvdbGuid = $xml.SelectNodes("//Guid") | Where-Object { $_.id -like "tvdb://*" }
-            if ($tvdbGuid -and $tvdbGuid.id) {
-                $GUID = $tvdbGuid.id -replace "tvdb://", ""
+            if ($ShowData.InnerXml -match '<Guid id="tvdb://(\d+)"') {
+                $GUID = $matches[1]
             }
         } catch {
             # Fallback: leave $GUID as $null
         }
         # Fallback to old format
         if ($ShowData.guid -and !$GUID) {
-            $GUID = $ShowData.guid -replace ".*//(\d+).*", '$1'
+            if ($ShowData.guid -match '://.*?/(\d+)') {
+                $GUID = $matches[1]
+            }
         }
         
         # Only process if we have a valid numeric GUID and valid ShowData
