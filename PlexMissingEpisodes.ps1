@@ -251,7 +251,7 @@ try {
             # Fallback: leave $GUID as $null
         }
         # Fallback to old format
-        elseif ($ShowData.guid) {
+        if ($ShowData.guid -and !$GUID) {
             $GUID = $ShowData.guid -replace ".*//(\d+).*", '$1'
         }
         
