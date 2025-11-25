@@ -27,6 +27,9 @@ param(
     
     [Parameter(HelpMessage = "Plex Password")]
     [string]$PlexPassword,
+
+    [Parameter(HelpMessage = "Plex Authentication Token (optional - bypasses login)")]
+    [string]$PlexToken,
     
     [Parameter(HelpMessage = "Single show filter - process only this show (supports partial matching)")]
     [string]$SingleShowFilter,
@@ -153,22 +156,29 @@ try {
 
     # Create Plex Headers
     $PlexHeaders = [System.Collections.Generic.Dictionary[[String], [String]]]::new()
-    $PlexHeaders.Add("Authorization", "Basic $([System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$PlexUsername`:$PlexPassword")))")
     $PlexHeaders.Add("X-Plex-Client-Identifier", "MissingTVEpisodes")
     $PlexHeaders.Add("X-Plex-Product", "PowerShell")
     $PlexHeaders.Add("X-Plex-Version", "V1")
 
-    # Try to get Plex Token
-    try {
-        $PlexToken = (Invoke-RestMethod -Uri 'https://plex.tv/users/sign_in.json' -Method Post -Headers $PlexHeaders).user.authToken
+    if (-not [string]::IsNullOrWhiteSpace($PlexToken)) {
         $PlexHeaders.Add("X-Plex-Token", $PlexToken)
-        [void]$PlexHeaders.Remove("Authorization")
-        Write-Host "Successfully authenticated with Plex" -ForegroundColor Green
+        Write-Host "Using provided Plex Token" -ForegroundColor Green
     }
-    catch {
-        Write-Host -ForegroundColor Red "Failed to get Plex Auth Token:"
-        Write-Host -ForegroundColor Red $_
-        throw
+    else {
+        $PlexHeaders.Add("Authorization", "Basic $([System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$PlexUsername`:$PlexPassword")))")
+
+        # Try to get Plex Token
+        try {
+            $PlexToken = (Invoke-RestMethod -Uri 'https://plex.tv/users/sign_in.json' -Method Post -Headers $PlexHeaders).user.authToken
+            $PlexHeaders.Add("X-Plex-Token", $PlexToken)
+            [void]$PlexHeaders.Remove("Authorization")
+            Write-Host "Successfully authenticated with Plex" -ForegroundColor Green
+        }
+        catch {
+            Write-Host -ForegroundColor Red "Failed to get Plex Auth Token:"
+            Write-Host -ForegroundColor Red $_
+            throw
+        }
     }
 
     # Try to get the Library IDs for TV Shows
