@@ -53,15 +53,15 @@ $TheTVDBAuthentication = @{
 }
 
 # Plex Server Information - use parameters if provided, otherwise fall back to defaults
-if (-not $PlexServer) { $PlexServer = "http://localhost:32400" }
+if (-not $PlexServer) { $PlexServer = "" }
 if (-not $PlexUsername) { $PlexUsername = '' }
 if (-not $PlexPassword) { $PlexPassword = '' }
 
 # Array of show names to ignore, example included
-$IgnoreList = if ($IgnoreShows) { $IgnoreShows } else {
-    [system.collections.generic.list[string]]::new(
-        # "Jeopardy!"
-    )
+$IgnoreList = if ($IgnoreShows -and $IgnoreShows.Count -gt 0) {
+    [system.collections.generic.list[string]]::new($IgnoreShows)
+} else {
+    [system.collections.generic.list[string]]::new()
 }
 
 # Single show filter - if specified, only this show will be processed (supports partial matching)
@@ -205,7 +205,7 @@ try {
             }
             else {
                 # Normal mode - process all shows except those in ignore list
-                if (-not $IgnoreList.Contains($Series.title)) {
+                if ($IgnoreList -eq $null -or -not $IgnoreList.Contains($Series.title)) {
                     $ShouldProcess = $true
                 }
             }
@@ -278,6 +278,8 @@ try {
         }
     }
 
+    Write-Host "Collected data for $($PlexShows.Count) shows with valid TVDB IDs" -ForegroundColor Green
+
     # Get Season data from Show Data
     $Progress = 0
     ForEach ($GUID in $PlexShows.Keys) {
@@ -289,9 +291,16 @@ try {
         
         ForEach ($RatingKey in $PlexShows[$GUID]["ratingKeys"]) {
             $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves" -Headers $PlexHeaders).MediaContainer.Video
+            
+            # Safe check for episodes
+            if ($Episodes -eq $null) {
+                Write-Host "Warning: No episodes found for $ShowTitle (RatingKey: $RatingKey)" -ForegroundColor Yellow
+                continue
+            }
+            
             $Seasons = $Episodes.parentIndex | Sort-Object -Unique
             ForEach ($Season in $Seasons) {
-                if (!($PlexShows[$GUID]["seasons"] -contains $Season)) {
+                if (!($PlexShows[$GUID]["seasons"].ContainsKey($Season))) {
                     $PlexShows[$GUID]["seasons"][$Season] = [System.Collections.Generic.List[hashtable]]::new()
                 }
             }
@@ -434,21 +443,32 @@ try {
                     continue
                 }
                 
-                # Check if this season exists in our Plex data
-                if ($PlexShows[$GUID]["seasons"][$Episode.seasonNumber.ToString()]) {
-                    $PlexSeasonData = $PlexShows[$GUID]["seasons"][$Episode.seasonNumber.ToString()]
+                # Safe season check
+                $seasonKey = $Episode.seasonNumber.ToString()
+                if ($PlexShows[$GUID]["seasons"] -ne $null -and $PlexShows[$GUID]["seasons"].ContainsKey($seasonKey)) {
+                    $PlexSeasonData = $PlexShows[$GUID]["seasons"][$seasonKey]
                     
                     # Check if episode is missing by both episode number and name
                     $EpisodeFound = $false
-                    if ($PlexSeasonData.Keys -contains $Episode.number) {
-                        $EpisodeFound = $true
-                    }
-                    elseif ($PlexSeasonData.Values -contains $Episode.name) {
-                        $EpisodeFound = $true
+                    
+                    # FIXED: $PlexSeasonData is a List[hashtable], so we need to check each hashtable in the list
+                    if ($PlexSeasonData -ne $null) {
+                        foreach ($episodeData in $PlexSeasonData) {
+                            if ($episodeData -ne $null) {
+                                if ($episodeData.ContainsKey($Episode.number)) {
+                                    $EpisodeFound = $true
+                                    break
+                                }
+                                elseif ($episodeData.Values -contains $Episode.name) {
+                                    $EpisodeFound = $true
+                                    break
+                                }
+                            }
+                        }
                     }
                     
                     if (!$EpisodeFound) {
-                        if (!$Missing.ContainsKey($ShowTitle)) {
+                        if ($Missing[$ShowTitle] -eq $null) {
                             $Missing[$ShowTitle] = [System.Collections.Generic.List[hashtable]]::new()
                         }
                         [void]$Missing[$ShowTitle].Add(@{
@@ -460,7 +480,7 @@ try {
                 }
                 else {
                     # Season doesn't exist in Plex, so all episodes are missing
-                    if (!$Missing.ContainsKey($ShowTitle)) {
+                    if ($Missing[$ShowTitle] -eq $null) {
                         $Missing[$ShowTitle] = [System.Collections.Generic.List[hashtable]]::new()
                     }
                     [void]$Missing[$ShowTitle].Add(@{
@@ -488,17 +508,19 @@ try {
                 # Find the GUID for this show to get year information
                 $ShowGUID = $null
                 ForEach ($GUID in $PlexShows.Keys) {
-                    if ($PlexShows[$GUID]["title"] -eq $Show) {
+                    if ($PlexShows[$GUID] -ne $null -and $PlexShows[$GUID]["title"] -eq $Show) {
                         $ShowGUID = $GUID
                         break
                     }
                 }
                 
-                    # Format show name with year if available
-                    $ShowNameWithYear = $Show
-                    if ($ShowGUID -and $PlexShows[$ShowGUID] -and $PlexShows[$ShowGUID]["year"] -and $PlexShows[$ShowGUID]["year"] -ne $null) {
-                        $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
-                    }                ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
+                # Format show name with year if available
+                $ShowNameWithYear = $Show
+                if ($ShowGUID -ne $null -and $PlexShows[$ShowGUID] -ne $null -and $PlexShows[$ShowGUID]["year"] -ne $null) {
+                    $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
+                }
+                
+                ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
                     $OutputContent += ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, [int]$Episode.airedSeason, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
                 }
             }
@@ -519,7 +541,7 @@ try {
             
             ForEach ($Show in ($Missing.Keys | Sort-Object)) {
                 $ShowMissing = $Missing[$Show]
-                $TotalShowMissing = $ShowMissing.Count
+                $TotalShowMissing = if ($ShowMissing -ne $null) { $ShowMissing.Count } else { 0 }
                 
                 $OutputContent += $Show
                 $OutputContent += "  Total missing episodes: $TotalShowMissing"
@@ -565,7 +587,7 @@ try {
             }
         }
         
-        $TotalMissing = ($Missing.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+        $TotalMissing = ($Missing.Values | ForEach-Object { if ($_ -ne $null) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
         $OutputContent += "Total missing episodes across all shows: $TotalMissing"
         
         if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
@@ -609,7 +631,7 @@ try {
                     # Find the GUID for this show to get year information
                     $ShowGUID = $null
                     ForEach ($GUID in $PlexShows.Keys) {
-                        if ($PlexShows[$GUID]["title"] -eq $Show) {
+                        if ($PlexShows[$GUID] -ne $null -and $PlexShows[$GUID]["title"] -eq $Show) {
                             $ShowGUID = $GUID
                             break
                         }
@@ -617,7 +639,7 @@ try {
                     
                     # Format show name with year if available
                     $ShowNameWithYear = $Show
-                    if ($ShowGUID -and $PlexShows[$ShowGUID] -and $PlexShows[$ShowGUID]["year"] -and $PlexShows[$ShowGUID]["year"] -ne $null) {
+                    if ($ShowGUID -ne $null -and $PlexShows[$ShowGUID] -ne $null -and $PlexShows[$ShowGUID]["year"] -ne $null) {
                         $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
                     }
                     
@@ -640,7 +662,7 @@ try {
                 
                 ForEach ($Show in ($Missing.Keys | Sort-Object)) {
                     $ShowMissing = $Missing[$Show]
-                    $TotalShowMissing = $ShowMissing.Count
+                    $TotalShowMissing = if ($ShowMissing -ne $null) { $ShowMissing.Count } else { 0 }
                     
                     Write-Host "$Show" -ForegroundColor Cyan
                     Write-Host "  Total missing episodes: $TotalShowMissing" -ForegroundColor Yellow
@@ -685,7 +707,7 @@ try {
                     Write-Host ""
                 }
                 
-                $TotalMissing = ($Missing.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+                $TotalMissing = ($Missing.Values | ForEach-Object { if ($_ -ne $null) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
                 Write-Host "Total missing episodes across all shows: $TotalMissing" -ForegroundColor Yellow
                 
                 if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
@@ -706,6 +728,8 @@ catch {
     Write-Host -ForegroundColor Red $_.Exception.Message
     Write-Host -ForegroundColor Red "`nFull error details:"
     Write-Host -ForegroundColor Red $_
+    Write-Host -ForegroundColor Red "`nError occurred at line: $($_.InvocationInfo.ScriptLineNumber)"
+    Write-Host -ForegroundColor Red "Command: $($_.InvocationInfo.Line)"
     
     # Only wait for input if not writing to file and running interactively
     if ([string]::IsNullOrWhiteSpace($OutputFile) -and $Host.Name -eq "ConsoleHost" -and [Environment]::UserInteractive) {
