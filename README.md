@@ -17,6 +17,7 @@ A PowerShell script that identifies missing TV show episodes in your Plex librar
 - **Detailed Reporting**: Shows missing episodes organized by season with episode names
 - **Automation Friendly**: No user prompts when saving to file, perfect for scheduled tasks
 - **Metadata Validation**: Reports episodes with missing season/episode numbers
+- **MFA Support**: Supports authentication via Plex Token for users with Multi-Factor Authentication enabled
 - **Comprehensive Error Handling**: Robust authentication and API error management
 
 ## Quick Start
@@ -74,6 +75,7 @@ if (-not $SingleShowFilter) { $SingleShowFilter = "" }
 | `-PlexServer` | String | Plex server URL | `-PlexServer "http://server:32400"` |
 | `-PlexUsername` | String | Plex username | `-PlexUsername "myuser"` |
 | `-PlexPassword` | String | Plex password | `-PlexPassword "mypass"` |
+| `-PlexToken` | String | Plex authentication token (bypasses login/MFA) | `-PlexToken "abc123xyz"` |
 | `-SingleShowFilter` | String | Process only this show (partial matching) | `-SingleShowFilter "Breaking Bad"` |
 | `-IgnoreShows` | String[] | Shows to ignore (comma-separated) | `-IgnoreShows "Show1","Show2"` |
 | `-OutputFile` | String | Save results to file instead of console | `-OutputFile "missing.txt"` |
@@ -95,6 +97,9 @@ if (-not $SingleShowFilter) { $SingleShowFilter = "" }
 
 # Full configuration via parameters
 ./PlexMissingEpisodes.ps1 -ApiKey "your-api-key" -PlexServer "http://server:32400" -PlexUsername "user" -PlexPassword "pass"
+
+# Using Plex Token (Required if MFA is enabled)
+./PlexMissingEpisodes.ps1 -ApiKey "your-api-key" -PlexServer "http://server:32400" -PlexToken "your-plex-token"
 
 # Focus on specific show
 ./PlexMissingEpisodes.ps1 -SingleShowFilter "Breaking Bad"
