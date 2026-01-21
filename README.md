@@ -68,18 +68,19 @@ if (-not $SingleShowFilter) { $SingleShowFilter = "" }
 
 ## Parameters
 
-| Parameter | Type | Description | Example |
-|-----------|------|-------------|---------|
-| `-ApiKey` | String | TheTVDB API key (required) | `-ApiKey "abc123"` |
-| `-Pin` | String | TheTVDB Subscriber PIN (optional) | `-Pin "1234"` |
-| `-PlexServer` | String | Plex server URL | `-PlexServer "http://server:32400"` |
-| `-PlexUsername` | String | Plex username | `-PlexUsername "myuser"` |
-| `-PlexPassword` | String | Plex password | `-PlexPassword "mypass"` |
-| `-PlexToken` | String | Plex authentication token (bypasses login/MFA) | `-PlexToken "abc123xyz"` |
-| `-SingleShowFilter` | String | Process only this show (partial matching) | `-SingleShowFilter "Breaking Bad"` |
-| `-IgnoreShows` | String[] | Shows to ignore (comma-separated) | `-IgnoreShows "Show1","Show2"` |
-| `-OutputFile` | String | Save results to file instead of console | `-OutputFile "missing.txt"` |
-| `-SimpleOutput` | Switch | Use simple one-line format for easy searching | `-SimpleOutput` |
+| Parameter           | Type     | Description                                    | Example                             |
+| ------------------- | -------- | ---------------------------------------------- | ----------------------------------- |
+| `-ApiKey`           | String   | TheTVDB API key (required)                     | `-ApiKey "abc123"`                  |
+| `-Pin`              | String   | TheTVDB Subscriber PIN (optional)              | `-Pin "1234"`                       |
+| `-PlexServer`       | String   | Plex server URL                                | `-PlexServer "http://server:32400"` |
+| `-PlexUsername`     | String   | Plex username                                  | `-PlexUsername "myuser"`            |
+| `-PlexPassword`     | String   | Plex password                                  | `-PlexPassword "mypass"`            |
+| `-PlexToken`        | String   | Plex authentication token (bypasses login/MFA) | `-PlexToken "abc123xyz"`            |
+| `-SingleShowFilter` | String   | Process only this show (partial matching)      | `-SingleShowFilter "Breaking Bad"`  |
+| `-IgnoreShows`      | String[] | Shows to ignore (comma-separated)              | `-IgnoreShows "Show1","Show2"`      |
+| `-OutputFile`       | String   | Save results to file instead of console        | `-OutputFile "missing.txt"`         |
+| `-SimpleOutput`     | Switch   | Use simple one-line format for easy searching  | `-SimpleOutput`                     |
+| `-IncludeExtras`    | Switch   | Include Season 0 (specials/extras) in results  | `-IncludeExtras`                    |
 
 ## Usage Examples
 
@@ -112,6 +113,9 @@ if (-not $SingleShowFilter) { $SingleShowFilter = "" }
 
 # Use simple output format for easy searching
 ./PlexMissingEpisodes.ps1 -SimpleOutput
+
+# Include Season 0 (specials/extras) in results
+./PlexMissingEpisodes.ps1 -IncludeExtras
 
 # Combine simple output with file saving
 ./PlexMissingEpisodes.ps1 -SimpleOutput -OutputFile "missing-simple.txt"
@@ -173,7 +177,7 @@ Perfect for automation, searching, and scripting with clean one-line entries:
 
 ```text
 What We Do in the Shadows (2019) - S03E06 - The Escape
-Breaking Bad (2008) - S02E03 - Bit by a Dead Bee  
+Breaking Bad (2008) - S02E03 - Bit by a Dead Bee
 The Office (2005) - S05E14 - Lecture Circuit: Part 1
 ```
 
