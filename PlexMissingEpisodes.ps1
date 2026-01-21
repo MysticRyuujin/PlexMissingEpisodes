@@ -41,7 +41,10 @@ param(
     [string]$OutputFile,
     
     [Parameter(HelpMessage = "Use simple output format: Show Name (Year) - SXXEXX - Title")]
-    [switch]$SimpleOutput
+    [switch]$SimpleOutput,
+    
+    [Parameter(HelpMessage = "Include Season 0 (extras/specials) in results")]
+    [switch]$IncludeExtras
 )
 
 # ============================================================================
@@ -63,7 +66,8 @@ if (-not $PlexPassword) { $PlexPassword = '' }
 # Array of show names to ignore, example included
 $IgnoreList = if ($IgnoreShows -and $IgnoreShows.Count -gt 0) {
     [system.collections.generic.list[string]]::new($IgnoreShows)
-} else {
+}
+else {
     [system.collections.generic.list[string]]::new()
 }
 
@@ -215,7 +219,7 @@ try {
             }
             else {
                 # Normal mode - process all shows except those in ignore list
-                if ($IgnoreList -eq $null -or -not $IgnoreList.Contains($Series.title)) {
+                if ($null -eq $IgnoreList -or -not $IgnoreList.Contains($Series.title)) {
                     $ShouldProcess = $true
                 }
             }
@@ -258,7 +262,8 @@ try {
             if ($ShowData.InnerXml -match '<Guid id="tvdb://(\d+)"') {
                 $GUID = $matches[1]
             }
-        } catch {
+        }
+        catch {
             # Fallback: leave $GUID as $null
         }
         # Fallback to old format
@@ -278,7 +283,7 @@ try {
             else {
                 [void]$PlexShows.Add($GUID, @{
                         "title"      = $ShowData.title
-                        "year"       = if ($ShowData.year -and $ShowData.year -ne $null -and $ShowData.year -ne "") { $ShowData.year } else { $null }
+                        "year"       = if ($ShowData.year -and $null -ne $ShowData.year -and $ShowData.year -ne "") { $ShowData.year } else { $null }
                         "ratingKeys" = [System.Collections.Generic.List[int]]::new()
                         "seasons"    = @{ }
                     }
@@ -303,15 +308,17 @@ try {
             $Episodes = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/allLeaves" -Headers $PlexHeaders).MediaContainer.Video
             
             # Safe check for episodes
-            if ($Episodes -eq $null) {
+            if ($null -eq $Episodes) {
                 Write-Host "Warning: No episodes found for $ShowTitle (RatingKey: $RatingKey)" -ForegroundColor Yellow
                 continue
             }
             
             $Seasons = $Episodes.parentIndex | Sort-Object -Unique
             ForEach ($Season in $Seasons) {
-                if (!($PlexShows[$GUID]["seasons"].ContainsKey($Season))) {
-                    $PlexShows[$GUID]["seasons"][$Season] = [System.Collections.Generic.List[hashtable]]::new()
+                # Cast to int to ensure type consistency with later lookups
+                $SeasonInt = [int]$Season
+                if (!($PlexShows[$GUID]["seasons"].ContainsKey($SeasonInt))) {
+                    $PlexShows[$GUID]["seasons"][$SeasonInt] = [System.Collections.Generic.List[hashtable]]::new()
                 }
             }
             # Track episodes with missing metadata for this show
@@ -348,7 +355,9 @@ try {
                     
                     # Add each episode number to the collection
                     ForEach ($EpNum in $EpisodeNumbers) {
-                        [void]$PlexShows[$GUID]["seasons"][$Episode.parentIndex].Add(@{$EpNum = $Episode.title })
+                        # Cast parentIndex to int for type consistency
+                        $SeasonInt = [int]$Episode.parentIndex
+                        [void]$PlexShows[$GUID]["seasons"][$SeasonInt].Add(@{$EpNum = $Episode.title })
                     }
                 }
             }
@@ -372,7 +381,7 @@ try {
         }
     }
 
-    # Missing Episodes
+    # Missing Episodes - Use GUID as key to avoid issues with shows in multiple libraries
     $Missing = @{ }
     $Progress = 0
     ForEach ($GUID in $PlexShows.Keys) {
@@ -386,16 +395,9 @@ try {
         $Episodes = $null
         try {
             # API v4 uses different pagination and endpoint structure
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                Write-Host "Debug: Fetching episodes for '$ShowTitle' (TVDB ID: $GUID)" -ForegroundColor Yellow
-            }
             
             $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
             $Episodes = $Results.data.episodes
-            
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                Write-Host "Debug: Page 0 returned $($Episodes.Count) episodes" -ForegroundColor Gray
-            }
             
             # Handle pagination if there are more pages
             while ($Results.links -and $Results.links.next) {
@@ -403,45 +405,20 @@ try {
                 $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
                 if ($Results.data.episodes) {
                     $Episodes += $Results.data.episodes
-                    if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                        Write-Host "Debug: Page $Page returned $($Results.data.episodes.Count) episodes (Total: $($Episodes.Count))" -ForegroundColor Gray
-                    }
                 }
-            }
-            
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                Write-Host "Debug: Total episodes retrieved: $($Episodes.Count)" -ForegroundColor Green
             }
         }
         catch {
             Write-Warning "Failed to get Episodes for $ShowTitle (GUID: $GUID): $($_.Exception.Message)"
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                Write-Host "Debug: Error details: $($_.ErrorDetails.Message)" -ForegroundColor Red
-            }
             $Episodes = $null
         }
     
         if ($Episodes) {
-            if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
-                # Show season breakdown for debug
-                $SeasonBreakdown = $Episodes | Group-Object seasonNumber | Sort-Object { [int]$_.Name }
-                Write-Host "Debug: TheTVDB Season breakdown for '$ShowTitle':" -ForegroundColor Yellow
-                ForEach ($SeasonGroup in $SeasonBreakdown) {
-                    Write-Host "  Season $($SeasonGroup.Name): $($SeasonGroup.Count) episodes" -ForegroundColor Gray
-                }
-                
-                # Show Plex season breakdown for comparison
-                Write-Host "Debug: Plex Season breakdown for '$ShowTitle':" -ForegroundColor Yellow
-                ForEach ($Season in ($PlexShows[$GUID]["seasons"].Keys | Sort-Object { [int]$_ })) {
-                    $EpCount = $PlexShows[$GUID]["seasons"][$Season].Count
-                    Write-Host "  Season ${Season}: $EpCount episodes in Plex" -ForegroundColor Gray
-                }
-            }
-            
             ForEach ($Episode in $Episodes) {
+                
                 # API v4 uses different field names: seasonNumber instead of airedSeason, number instead of airedEpisodeNumber, name instead of episodeName
                 if ($null -eq $Episode.seasonNumber) { continue } # Ignore episodes with blank seasons (#11)
-                if ($Episode.seasonNumber -eq 0) { continue } # Ignore Season 0 / Specials
+                if ($Episode.seasonNumber -eq 0 -and -not $IncludeExtras) { continue } # Ignore Season 0 / Specials unless user requested to include them
                 if (!$Episode.aired) { continue } # Ignore unaired episodes (API v4 uses 'aired' instead of 'firstAired')
                 
                 # Check if episode aired more than 24 hours ago
@@ -454,17 +431,17 @@ try {
                 }
                 
                 # Safe season check
-                $seasonKey = $Episode.seasonNumber.ToString()
-                if ($PlexShows[$GUID]["seasons"] -ne $null -and $PlexShows[$GUID]["seasons"].ContainsKey($seasonKey)) {
+                $seasonKey = [int]$Episode.seasonNumber
+                if ($null -ne $PlexShows[$GUID]["seasons"] -and $PlexShows[$GUID]["seasons"].ContainsKey($seasonKey)) {
                     $PlexSeasonData = $PlexShows[$GUID]["seasons"][$seasonKey]
                     
                     # Check if episode is missing by both episode number and name
                     $EpisodeFound = $false
                     
                     # FIXED: $PlexSeasonData is a List[hashtable], so we need to check each hashtable in the list
-                    if ($PlexSeasonData -ne $null) {
+                    if ($null -ne $PlexSeasonData) {
                         foreach ($episodeData in $PlexSeasonData) {
-                            if ($episodeData -ne $null) {
+                            if ($null -ne $episodeData) {
                                 if ($episodeData.ContainsKey($Episode.number)) {
                                     $EpisodeFound = $true
                                     break
@@ -478,24 +455,24 @@ try {
                     }
                     
                     if (!$EpisodeFound) {
-                        if ($Missing[$ShowTitle] -eq $null) {
-                            $Missing[$ShowTitle] = [System.Collections.Generic.List[hashtable]]::new()
+                        if ($null -eq $Missing[$GUID]) {
+                            $Missing[$GUID] = [System.Collections.Generic.List[hashtable]]::new()
                         }
-                        [void]$Missing[$ShowTitle].Add(@{
-                                "airedSeason"        = $Episode.seasonNumber.ToString()
-                                "airedEpisodeNumber" = $Episode.number.ToString()
+                        [void]$Missing[$GUID].Add(@{
+                                "airedSeason"        = [int]$Episode.seasonNumber
+                                "airedEpisodeNumber" = [int]$Episode.number
                                 "episodeName"        = $Episode.name
                             })
                     }
                 }
                 else {
                     # Season doesn't exist in Plex, so all episodes are missing
-                    if ($Missing[$ShowTitle] -eq $null) {
-                        $Missing[$ShowTitle] = [System.Collections.Generic.List[hashtable]]::new()
+                    if ($null -eq $Missing[$GUID]) {
+                        $Missing[$GUID] = [System.Collections.Generic.List[hashtable]]::new()
                     }
-                    [void]$Missing[$ShowTitle].Add(@{
-                            "airedSeason"        = $Episode.seasonNumber.ToString()
-                            "airedEpisodeNumber" = $Episode.number.ToString()
+                    [void]$Missing[$GUID].Add(@{
+                            "airedSeason"        = [int]$Episode.seasonNumber
+                            "airedEpisodeNumber" = [int]$Episode.number
                             "episodeName"        = $Episode.name
                         })
                 }
@@ -512,26 +489,27 @@ try {
             $OutputContent += "No missing episodes found! All shows are up to date."
         }
         else {
-            ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-                $ShowMissing = $Missing[$Show]
-                
-                # Find the GUID for this show to get year information
-                $ShowGUID = $null
-                ForEach ($GUID in $PlexShows.Keys) {
-                    if ($PlexShows[$GUID] -ne $null -and $PlexShows[$GUID]["title"] -eq $Show) {
-                        $ShowGUID = $GUID
-                        break
-                    }
+            # Convert GUID keys to show titles and sort
+            $SortedShows = $Missing.Keys | ForEach-Object {
+                @{
+                    GUID = $_
+                    Title = $PlexShows[$_]["title"]
                 }
+            } | Sort-Object Title
+            
+            ForEach ($ShowInfo in $SortedShows) {
+                $GUID = $ShowInfo.GUID
+                $Show = $ShowInfo.Title
+                $ShowMissing = $Missing[$GUID]
                 
                 # Format show name with year if available
                 $ShowNameWithYear = $Show
-                if ($ShowGUID -ne $null -and $PlexShows[$ShowGUID] -ne $null -and $PlexShows[$ShowGUID]["year"] -ne $null) {
-                    $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
+                if ($null -ne $PlexShows[$GUID] -and $null -ne $PlexShows[$GUID]["year"]) {
+                    $ShowNameWithYear = "$Show ($($PlexShows[$GUID]["year"]))"
                 }
                 
-                ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
-                    $OutputContent += ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, [int]$Episode.airedSeason, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                ForEach ($Episode in ($ShowMissing | Sort-Object { $_.airedSeason }, { $_.airedEpisodeNumber })) {
+                    $OutputContent += ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, $Episode.airedSeason, $Episode.airedEpisodeNumber, $Episode.episodeName)
                 }
             }
         }
@@ -549,46 +527,59 @@ try {
             $OutputContent += "Found missing episodes in $($Missing.Keys.Count) show(s):"
             $OutputContent += ""
             
-            ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-                $ShowMissing = $Missing[$Show]
-                $TotalShowMissing = if ($ShowMissing -ne $null) { $ShowMissing.Count } else { 0 }
+            # Convert GUID keys to show titles and sort
+            $SortedShows = $Missing.Keys | ForEach-Object {
+                @{
+                    GUID = $_
+                    Title = $PlexShows[$_]["title"]
+                }
+            } | Sort-Object Title
+            
+            ForEach ($ShowInfo in $SortedShows) {
+                $GUID = $ShowInfo.GUID
+                $Show = $ShowInfo.Title
+                $ShowMissing = $Missing[$GUID]
+                $TotalShowMissing = if ($null -ne $ShowMissing) { $ShowMissing.Count } else { 0 }
                 
                 $OutputContent += $Show
                 $OutputContent += "  Total missing episodes: $TotalShowMissing"
                 
                 # Group by season for summary
-                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
+                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { $_.Name }
                 $OutputContent += "  Missing episodes by season:"
                 
                 ForEach ($SeasonGroup in $SeasonSummary) {
                     $SeasonNum = $SeasonGroup.Name
                     $EpisodeCount = $SeasonGroup.Count
-                    $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
-                    $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+                    $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
+                    $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Maximum).Maximum
+                    
+                    # Format season number for display
+                    $SeasonDisplay = $SeasonNum
                     
                     if ($EpisodeCount -le 10) {
-                        $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes"
-                        ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
-                            $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                        $OutputContent += "    Season $SeasonDisplay`: $EpisodeCount episodes"
+                        ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { $_.airedEpisodeNumber })) {
+                            $OutputContent += ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName)
                         }
                     }
                     else {
-                        $OutputContent += "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)"
+                        $OutputContent += "    Season $SeasonDisplay`: $EpisodeCount episodes (E$MinEp - E$MaxEp)"
                         
                         # Show first 3 and last 3 episodes for large seasons
-                        $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
+                        $SortedEpisodes = $SeasonGroup.Group | Sort-Object { $_.airedEpisodeNumber }
                         $FirstThree = $SortedEpisodes | Select-Object -First 3
                         $LastThree = $SortedEpisodes | Select-Object -Last 3
                         
                         ForEach ($Episode in $FirstThree) {
-                            $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                            $OutputContent += ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName)
                         }
                         if ($EpisodeCount -gt 6) {
                             $OutputContent += "      ... ($($EpisodeCount - 6) more episodes) ..."
                         }
                         if ($EpisodeCount -gt 3) {
                             ForEach ($Episode in $LastThree) {
-                                $OutputContent += ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName)
+                                $OutputContent += ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName)
                             }
                         }
                     }
@@ -597,7 +588,7 @@ try {
             }
         }
         
-        $TotalMissing = ($Missing.Values | ForEach-Object { if ($_ -ne $null) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
+        $TotalMissing = ($Missing.Values | ForEach-Object { if ($null -ne $_) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
         $OutputContent += "Total missing episodes across all shows: $TotalMissing"
         
         if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
@@ -635,26 +626,27 @@ try {
                 Write-Host "No missing episodes found! All shows are up to date." -ForegroundColor Green
             }
             else {
-                ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-                    $ShowMissing = $Missing[$Show]
-                    
-                    # Find the GUID for this show to get year information
-                    $ShowGUID = $null
-                    ForEach ($GUID in $PlexShows.Keys) {
-                        if ($PlexShows[$GUID] -ne $null -and $PlexShows[$GUID]["title"] -eq $Show) {
-                            $ShowGUID = $GUID
-                            break
-                        }
+                # Convert GUID keys to show titles and sort
+                $SortedShows = $Missing.Keys | ForEach-Object {
+                    @{
+                        GUID = $_
+                        Title = $PlexShows[$_]["title"]
                     }
+                } | Sort-Object Title
+                
+                ForEach ($ShowInfo in $SortedShows) {
+                    $GUID = $ShowInfo.GUID
+                    $Show = $ShowInfo.Title
+                    $ShowMissing = $Missing[$GUID]
                     
                     # Format show name with year if available
                     $ShowNameWithYear = $Show
-                    if ($ShowGUID -ne $null -and $PlexShows[$ShowGUID] -ne $null -and $PlexShows[$ShowGUID]["year"] -ne $null) {
-                        $ShowNameWithYear = "$Show ($($PlexShows[$ShowGUID]["year"]))"
+                    if ($null -ne $PlexShows[$GUID] -and $null -ne $PlexShows[$GUID]["year"]) {
+                        $ShowNameWithYear = "$Show ($($PlexShows[$GUID]["year"]))"
                     }
                     
-                    ForEach ($Episode in ($ShowMissing | Sort-Object { [int]$_.airedSeason }, { [int]$_.airedEpisodeNumber })) {
-                        Write-Host ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, [int]$Episode.airedSeason, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor White
+                    ForEach ($Episode in ($ShowMissing | Sort-Object { $_.airedSeason }, { $_.airedEpisodeNumber })) {
+                        Write-Host ("{0} - S{1:00}E{2:00} - {3}" -f $ShowNameWithYear, $Episode.airedSeason, $Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor White
                     }
                 }
             }
@@ -670,46 +662,59 @@ try {
             else {
                 Write-Host "`nFound missing episodes in $($Missing.Keys.Count) show(s):`n" -ForegroundColor Red
                 
-                ForEach ($Show in ($Missing.Keys | Sort-Object)) {
-                    $ShowMissing = $Missing[$Show]
-                    $TotalShowMissing = if ($ShowMissing -ne $null) { $ShowMissing.Count } else { 0 }
+                # Convert GUID keys to show titles and sort
+                $SortedShows = $Missing.Keys | ForEach-Object {
+                    @{
+                        GUID = $_
+                        Title = $PlexShows[$_]["title"]
+                    }
+                } | Sort-Object Title
+                
+                ForEach ($ShowInfo in $SortedShows) {
+                    $GUID = $ShowInfo.GUID
+                    $Show = $ShowInfo.Title
+                    $ShowMissing = $Missing[$GUID]
+                    $TotalShowMissing = if ($null -ne $ShowMissing) { $ShowMissing.Count } else { 0 }
                     
                     Write-Host "$Show" -ForegroundColor Cyan
                     Write-Host "  Total missing episodes: $TotalShowMissing" -ForegroundColor Yellow
                     
                     # Group by season for summary
-                    $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
+                    $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { $_.Name }
                     Write-Host "  Missing episodes by season:" -ForegroundColor Gray
                     
                     ForEach ($SeasonGroup in $SeasonSummary) {
                         $SeasonNum = $SeasonGroup.Name
                         $EpisodeCount = $SeasonGroup.Count
-                        $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Minimum).Minimum
-                        $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+                        $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
+                        $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Maximum).Maximum
+                        
+                        # Format season number for display
+                        $SeasonDisplay = $SeasonNum
                         
                         if ($EpisodeCount -le 10) {
-                            Write-Host "    Season $SeasonNum`: $EpisodeCount episodes" -ForegroundColor Gray
-                            ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber })) {
-                                Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                            Write-Host "    Season $SeasonDisplay`: $EpisodeCount episodes" -ForegroundColor Gray
+                            ForEach ($Episode in ($SeasonGroup.Group | Sort-Object { $_.airedEpisodeNumber })) {
+                                Write-Host ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
                             }
                         }
                         else {
-                            Write-Host "    Season $SeasonNum`: $EpisodeCount episodes (E$MinEp - E$MaxEp)" -ForegroundColor Gray
+                            Write-Host "    Season $SeasonDisplay`: $EpisodeCount episodes (E$MinEp - E$MaxEp)" -ForegroundColor Gray
                             
                             # Show first 3 and last 3 episodes for large seasons
-                            $SortedEpisodes = $SeasonGroup.Group | Sort-Object { [int]$_.airedEpisodeNumber }
+                            $SortedEpisodes = $SeasonGroup.Group | Sort-Object { $_.airedEpisodeNumber }
                             $FirstThree = $SortedEpisodes | Select-Object -First 3
                             $LastThree = $SortedEpisodes | Select-Object -Last 3
                             
                             ForEach ($Episode in $FirstThree) {
-                                Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                                Write-Host ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
                             }
                             if ($EpisodeCount -gt 6) {
                                 Write-Host "      ... ($($EpisodeCount - 6) more episodes) ..." -ForegroundColor DarkGray
                             }
                             if ($EpisodeCount -gt 3) {
                                 ForEach ($Episode in $LastThree) {
-                                    Write-Host ("      S{0:00}E{1:00} - {2}" -f [int]$SeasonNum, [int]$Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
+                                    Write-Host ("      S{0:00}E{1:00} - {2}" -f $SeasonNum, $Episode.airedEpisodeNumber, $Episode.episodeName) -ForegroundColor DarkGray
                                 }
                             }
                         }
@@ -717,7 +722,7 @@ try {
                     Write-Host ""
                 }
                 
-                $TotalMissing = ($Missing.Values | ForEach-Object { if ($_ -ne $null) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
+                $TotalMissing = ($Missing.Values | ForEach-Object { if ($null -ne $_) { $_.Count } else { 0 } } | Measure-Object -Sum).Sum
                 Write-Host "Total missing episodes across all shows: $TotalMissing" -ForegroundColor Yellow
                 
                 if (-not [string]::IsNullOrWhiteSpace($SingleShowFilter)) {
