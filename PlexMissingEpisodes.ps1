@@ -417,7 +417,7 @@ try {
             ForEach ($Episode in $Episodes) {
                 
                 # API v4 uses different field names: seasonNumber instead of airedSeason, number instead of airedEpisodeNumber, name instead of episodeName
-                if ($null -eq $Episode.seasonNumber) { continue } # Ignore episodes with blank seasons (#11)
+                if ($null -eq $Episode.seasonNumber -or [string]::IsNullOrWhiteSpace($Episode.seasonNumber)) { continue } # Ignore episodes with blank seasons (#11)
                 if ($Episode.seasonNumber -eq 0 -and -not $IncludeExtras) { continue } # Ignore Season 0 / Specials unless user requested to include them
                 if (!$Episode.aired) { continue } # Ignore unaired episodes (API v4 uses 'aired' instead of 'firstAired')
                 
@@ -545,11 +545,16 @@ try {
                 $OutputContent += "  Total missing episodes: $TotalShowMissing"
                 
                 # Group by season for summary
-                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { $_.Name }
+                $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
                 $OutputContent += "  Missing episodes by season:"
                 
                 ForEach ($SeasonGroup in $SeasonSummary) {
                     $SeasonNum = $SeasonGroup.Name
+                    # Handle cases where season number might be null, empty, or whitespace
+                    if ([string]::IsNullOrWhiteSpace($SeasonNum)) {
+                        $SeasonNum = 0
+                        Write-Warning "Found episodes with blank season number for show: $Show"
+                    }
                     $EpisodeCount = $SeasonGroup.Count
                     $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
                     $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Maximum).Maximum
@@ -680,11 +685,16 @@ try {
                     Write-Host "  Total missing episodes: $TotalShowMissing" -ForegroundColor Yellow
                     
                     # Group by season for summary
-                    $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { $_.Name }
+                    $SeasonSummary = $ShowMissing | Group-Object airedSeason | Sort-Object { [int]$_.Name }
                     Write-Host "  Missing episodes by season:" -ForegroundColor Gray
                     
                     ForEach ($SeasonGroup in $SeasonSummary) {
                         $SeasonNum = $SeasonGroup.Name
+                        # Handle cases where season number might be null, empty, or whitespace
+                        if ([string]::IsNullOrWhiteSpace($SeasonNum)) {
+                            $SeasonNum = 0
+                            Write-Warning "Found episodes with blank season number for show: $Show"
+                        }
                         $EpisodeCount = $SeasonGroup.Count
                         $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
                         $MaxEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Maximum).Maximum
