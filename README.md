@@ -6,7 +6,9 @@ A PowerShell script that identifies missing TV show episodes in your Plex librar
 
 - **Automatic Discovery**: Scans all TV show libraries in Plex without manual section configuration
 - **TheTVDB Integration**: Uses TheTVDB API v4 for accurate episode data
-- **Smart Episode Detection**: Handles multi-episode files and episode ranges (e.g., "S02E01-02")
+- **TVDB Data Caching**: Speeds up repeated runs and reduces API calls with configurable expiration
+- **Smart Episode Detection**: Handles multi-episode files, episode ranges (e.g., "S02E01-02"), and date-based titles (e.g., "Episode 01-11")
+- **Improved Daily Show Matching**: Uses date-based matching for shows that use year-based seasons (like Jeopardy!)
 - **Flexible Configuration**: Configure via command-line parameters or script variables
 - **Dual Output Formats**:
   - **Standard**: Detailed reports with summaries and grouping
@@ -15,6 +17,7 @@ A PowerShell script that identifies missing TV show episodes in your Plex librar
 - **Flexible Filtering**: Process all shows, ignore specific shows, or focus on a single show
 - **Year Detection**: Automatically includes show year when available from Plex metadata
 - **Detailed Reporting**: Shows missing episodes organized by season with episode names
+- **Show Validation**: Reports shows that are missing valid TVDB IDs or are improperly matched
 - **Automation Friendly**: No user prompts when saving to file, perfect for scheduled tasks
 - **Metadata Validation**: Reports episodes with missing season/episode numbers
 - **MFA Support**: Supports authentication via Plex Token for users with Multi-Factor Authentication enabled
@@ -81,6 +84,8 @@ if (-not $SingleShowFilter) { $SingleShowFilter = "" }
 | `-OutputFile`       | String   | Save results to file instead of console        | `-OutputFile "missing.txt"`         |
 | `-SimpleOutput`     | Switch   | Use simple one-line format for easy searching  | `-SimpleOutput`                     |
 | `-IncludeExtras`    | Switch   | Include Season 0 (specials/extras) in results  | `-IncludeExtras`                    |
+| `-CacheRetentionDays`| Int     | Days to keep the TVDB data cached (default: 1) | `-CacheRetentionDays 7`             |
+| `-ForceRefresh`     | Switch   | Force refresh of TVDB data, bypassing cache    | `-ForceRefresh`                     |
 
 ## Usage Examples
 

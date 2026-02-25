@@ -1,2 +1,5 @@
 # VS Code
 .vscode/*
+
+# TVDB Cache
+tvdb_cache.json

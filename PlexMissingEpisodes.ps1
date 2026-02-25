@@ -44,7 +44,13 @@ param(
     [switch]$SimpleOutput,
     
     [Parameter(HelpMessage = "Include Season 0 (extras/specials) in results")]
-    [switch]$IncludeExtras
+    [switch]$IncludeExtras,
+
+    [Parameter(HelpMessage = "Number of days to keep TVDB data cached (default: 1)")]
+    [int]$CacheRetentionDays = 1,
+
+    [Parameter(HelpMessage = "Force refresh of TVDB data, bypassing cache")]
+    [switch]$ForceRefresh
 )
 
 # ============================================================================
@@ -73,8 +79,21 @@ else {
 
 # Single show filter - if specified, only this show will be processed (supports partial matching)
 # Leave empty to process all shows (subject to IgnoreList)
-# Examples: "Jeopardy", "The Office", "Breaking Bad"
+# Examples: "Jeopardy!", "The Office", "Breaking Bad"
 if (-not $SingleShowFilter) { $SingleShowFilter = "" }
+
+# Cache related variables
+$CacheFile = Join-Path $PSScriptRoot "tvdb_cache.json"
+$TVDBCache = @{ }
+if (Test-Path $CacheFile) {
+    try {
+        $TVDBCache = Get-Content $CacheFile -Raw | ConvertFrom-Json -AsHashtable
+        Write-Host "Loaded TVDB cache from $CacheFile" -ForegroundColor Gray
+    }
+    catch {
+        Write-Warning "Failed to load TVDB cache, starting fresh."
+    }
+}
 
 # Function to parse episode ranges (e.g., "S02E01-02" -> episodes 1 and 2)
 function Get-EpisodeNumbers {
@@ -82,16 +101,32 @@ function Get-EpisodeNumbers {
     
     $Episodes = @()
     
+    if (-not $EpisodeString) { return $Episodes }
+
     # Handle range format like "S02E01-02" or "S02E01-E02"
     if ($EpisodeString -match 'S\d+E(\d+)[-]E?(\d+)') {
         $StartEp = [int]$matches[1]
         $EndEp = [int]$matches[2]
-        for ($i = $StartEp; $i -le $EndEp; $i++) {
-            $Episodes += $i
+        if ($StartEp -le $EndEp) {
+            for ($i = $StartEp; $i -le $EndEp; $i++) {
+                $Episodes += $i
+            }
         }
     }
-    # Handle single episode format like "S02E01"
+    # Handle single episode format like "S02E01" or "S2021E11"
     elseif ($EpisodeString -match 'S\d+E(\d+)') {
+        $Episodes += [int]$matches[1]
+    }
+    # Handle just E## or e## (common in titles/filenames after season identified)
+    elseif ($EpisodeString -match '(?i)(?:^|[\s\.\-_])E(\d+)(?:$|[\s\.\-_])') {
+        $Episodes += [int]$matches[1]
+    }
+    # Handle generic "Episode ##"
+    elseif ($EpisodeString -match '(?i)Episode\s+(\d+)') {
+        $Episodes += [int]$matches[1]
+    }
+    # Handle matching patterns like 1x01
+    elseif ($EpisodeString -match '\d+x(\d+)') {
         $Episodes += [int]$matches[1]
     }
     
@@ -241,6 +276,7 @@ try {
 
     # Get all Show Data
     $PlexShows = @{ }
+    $InvalidShows = @()
     $Progress = 0
     ForEach ($RatingKey in $RatingKeys) {
         $ShowData = (Invoke-RestMethod -Uri "$PlexServer/library/metadata/$RatingKey/" -Headers $PlexHeaders).MediaContainer.Directory
@@ -291,9 +327,24 @@ try {
                 [void]$PlexShows[$GUID]["ratingKeys"].Add($ShowData.ratingKey)
             }
         }
+        else {
+            if ($ShowData -and $ShowData.title) {
+                # Add to invalid shows - include the GUID if we found one but it was invalid
+                $Reason = if (!$GUID) { "No TVDB ID found" } else { "Invalid TVDB ID: $GUID" }
+                $InvalidShows += @{ Title = $ShowData.title; Reason = $Reason }
+            }
+        }
     }
 
     Write-Host "Collected data for $($PlexShows.Count) shows with valid TVDB IDs" -ForegroundColor Green
+    
+    if ($InvalidShows.Count -gt 0) {
+        Write-Host "The following $($InvalidShows.Count) shows were skipped because a valid TVDB ID could not be found:" -ForegroundColor Yellow
+        foreach ($Show in ($InvalidShows | Sort-Object Title)) {
+            Write-Host "   • $($Show.Title) ($($Show.Reason))" -ForegroundColor Gray
+        }
+        Write-Host "   (Note: Ensure these shows are matched using the 'Plex TV Series' or 'TheTVDB' agent)" -ForegroundColor Gray
+    }
 
     # Get Season data from Show Data
     $Progress = 0
@@ -326,39 +377,75 @@ try {
             $SampleMissingEpisodes = @()
             
             ForEach ($Episode in $Episodes) {
-                if ((!$Episode.parentIndex) -or (!$Episode.index)) {
+                # Try to determine episode numbers and aired date
+                $EpisodeNumbers = @()
+                $AiredDate = if ($Episode.originallyAvailableAt) { $Episode.originallyAvailableAt } else { $null }
+                
+                # 1. Use Plex Index if available
+                if ($Episode.index) {
+                    $EpisodeNumbers += [int]$Episode.index
+                }
+                
+                # 2. Try to extract from filename if index is missing or potentially incorrect
+                if ($Episode.Media -and $Episode.Media.Part -and $Episode.Media.Part.file) {
+                    $FileName = [System.IO.Path]::GetFileNameWithoutExtension($Episode.Media.Part.file)
+                    $FileEpNumbers = Get-EpisodeNumbers -EpisodeString $FileName
+                    
+                    if ($FileEpNumbers.Count -gt 0) {
+                        # If Plex gave us an index, but filename has a different one, or ranges...
+                        # For now, we'll favor filename if Plex index is missing
+                        if ($EpisodeNumbers.Count -eq 0) {
+                            $EpisodeNumbers = $FileEpNumbers
+                        }
+                    }
+                    
+                    # Try to extract date from filename if missing from Plex metadata
+                    if (!$AiredDate -and $FileName -match '(\d{4}[-\.]\d{2}[-\.]\d{2})') {
+                        $AiredDate = $matches[1] -replace '\.', '-'
+                    }
+                }
+                
+                # 3. Try to extract from title if still no numbers
+                if ($EpisodeNumbers.Count -eq 0 -and $Episode.title) {
+                    $EpisodeNumbers = Get-EpisodeNumbers -EpisodeString $Episode.title
+                }
+
+                # 4. Handle specific case for daily shows: Year in parentIndex + Month-Day in title/filename
+                if (!$AiredDate -and $Episode.parentIndex -gt 1900) {
+                    if ($Episode.title -match '(\d{2})[-\.](\d{2})') {
+                        $AiredDate = "$($Episode.parentIndex)-$($matches[1])-$($matches[2])"
+                    }
+                    elseif ($Episode.Media -and $Episode.Media.Part -and $Episode.Media.Part.file) {
+                        if ($FileName -match '(\d{2})[-\.](\d{2})') {
+                            $AiredDate = "$($Episode.parentIndex)-$($matches[1])-$($matches[2])"
+                        }
+                    }
+                }
+
+                # Check if we still have nothing
+                if ((!$Episode.parentIndex) -or ($EpisodeNumbers.Count -eq 0 -and !$AiredDate)) {
                     $MissingMetadataCount++
                     # Collect sample episodes for reporting (limit to first 3)
                     if ($SampleMissingEpisodes.Count -lt 3) {
                         $EpisodeInfo = @{
                             title       = $Episode.title
                             parentIndex = $Episode.parentIndex
-                            index       = $Episode.index
+                            index       = if ($EpisodeNumbers.Count -gt 0) { $EpisodeNumbers[0] } else { $null }
                         }
                         $SampleMissingEpisodes += $EpisodeInfo
                     }
                 }
                 else {
-                    # Handle episode ranges (e.g., if filename is "S02E01-02")
-                    $EpisodeNumbers = @()
+                    # Add to the collection
+                    $SeasonInt = [int]$Episode.parentIndex
                     
-                    # Check if this is a multi-episode file by looking at the filename/title
-                    if ($Episode.Media -and $Episode.Media.Part -and $Episode.Media.Part.file) {
-                        $FileName = [System.IO.Path]::GetFileNameWithoutExtension($Episode.Media.Part.file)
-                        $EpisodeNumbers = Get-EpisodeNumbers -EpisodeString $FileName
+                    # Store as a structured object
+                    $EpData = @{
+                        numbers = $EpisodeNumbers
+                        date    = $AiredDate
+                        title   = $Episode.title
                     }
-                    
-                    # If no episode numbers found from filename, use the index
-                    if ($EpisodeNumbers.Count -eq 0) {
-                        $EpisodeNumbers = @($Episode.index)
-                    }
-                    
-                    # Add each episode number to the collection
-                    ForEach ($EpNum in $EpisodeNumbers) {
-                        # Cast parentIndex to int for type consistency
-                        $SeasonInt = [int]$Episode.parentIndex
-                        [void]$PlexShows[$GUID]["seasons"][$SeasonInt].Add(@{$EpNum = $Episode.title })
-                    }
+                    [void]$PlexShows[$GUID]["seasons"][$SeasonInt].Add($EpData)
                 }
             }
             
@@ -393,24 +480,51 @@ try {
         
         $Page = 0
         $Episodes = $null
-        try {
-            # API v4 uses different pagination and endpoint structure
-            
-            $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
-            $Episodes = $Results.data.episodes
-            
-            # Handle pagination if there are more pages
-            while ($Results.links -and $Results.links.next) {
-                $Page++
-                $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
-                if ($Results.data.episodes) {
-                    $Episodes += $Results.data.episodes
+        $UseCache = $false
+        $CacheKey = [string]$GUID
+
+        # Check if we have valid cached data
+        if (-not $ForceRefresh -and $TVDBCache.ContainsKey($CacheKey)) {
+            $CachedData = $TVDBCache[$CacheKey]
+            try {
+                $CacheTime = [datetime]$CachedData.Timestamp
+                if ((Get-Date).AddDays(-$CacheRetentionDays) -lt $CacheTime) {
+                    $Episodes = $CachedData.Episodes
+                    $UseCache = $true
                 }
             }
+            catch {
+                $UseCache = $false
+            }
         }
-        catch {
-            Write-Warning "Failed to get Episodes for $ShowTitle (GUID: $GUID): $($_.Exception.Message)"
-            $Episodes = $null
+
+        if (-not $UseCache) {
+            try {
+                # API v4 uses different pagination and endpoint structure
+                $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
+                $Episodes = $Results.data.episodes
+                
+                # Handle pagination if there are more pages
+                while ($Results.links -and $Results.links.next) {
+                    $Page++
+                    $Results = (Invoke-RestMethod -Uri "https://api4.thetvdb.com/v4/series/$GUID/episodes/default?page=$Page" -Headers $TVDBHeaders)
+                    if ($Results.data.episodes) {
+                        $Episodes += $Results.data.episodes
+                    }
+                }
+
+                # Update cache if we got results
+                if ($Episodes) {
+                    $TVDBCache[$CacheKey] = @{
+                        Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                        Episodes  = $Episodes
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Failed to get Episodes for $ShowTitle (GUID: $GUID): $($_.Exception.Message)"
+                $Episodes = $null
+            }
         }
     
         if ($Episodes) {
@@ -435,18 +549,26 @@ try {
                 if ($null -ne $PlexShows[$GUID]["seasons"] -and $PlexShows[$GUID]["seasons"].ContainsKey($seasonKey)) {
                     $PlexSeasonData = $PlexShows[$GUID]["seasons"][$seasonKey]
                     
-                    # Check if episode is missing by both episode number and name
+                    # Check if episode is missing by number, date, or name
                     $EpisodeFound = $false
                     
-                    # FIXED: $PlexSeasonData is a List[hashtable], so we need to check each hashtable in the list
                     if ($null -ne $PlexSeasonData) {
-                        foreach ($episodeData in $PlexSeasonData) {
-                            if ($null -ne $episodeData) {
-                                if ($episodeData.ContainsKey($Episode.number)) {
+                        foreach ($episodeRecord in $PlexSeasonData) {
+                            if ($null -ne $episodeRecord) {
+                                # 1. Match by episode number
+                                if ($episodeRecord.numbers -and $episodeRecord.numbers -contains [int]$Episode.number) {
                                     $EpisodeFound = $true
                                     break
                                 }
-                                elseif ($episodeData.Values -contains $Episode.name) {
+                                
+                                # 2. Match by aired date (crucial for daily shows like Jeopardy!)
+                                if ($episodeRecord.date -and $Episode.aired -and $episodeRecord.date.ToString().StartsWith($Episode.aired)) {
+                                    $EpisodeFound = $true
+                                    break
+                                }
+                                
+                                # 3. Match by name
+                                if ($episodeRecord.title -and $Episode.name -and $episodeRecord.title -eq $Episode.name) {
                                     $EpisodeFound = $true
                                     break
                                 }
@@ -554,6 +676,8 @@ try {
                     if ([string]::IsNullOrWhiteSpace($SeasonNum)) {
                         $SeasonNum = 0
                         Write-Warning "Found episodes with blank season number for show: $Show"
+                    } else {
+                        $SeasonNum = [int]$SeasonNum
                     }
                     $EpisodeCount = $SeasonGroup.Count
                     $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
@@ -694,6 +818,8 @@ try {
                         if ([string]::IsNullOrWhiteSpace($SeasonNum)) {
                             $SeasonNum = 0
                             Write-Warning "Found episodes with blank season number for show: $Show"
+                        } else {
+                            $SeasonNum = [int]$SeasonNum
                         }
                         $EpisodeCount = $SeasonGroup.Count
                         $MinEp = ($SeasonGroup.Group.airedEpisodeNumber | Measure-Object -Minimum).Minimum
@@ -741,6 +867,17 @@ try {
             }
             
             Write-Host "`n=== END REPORT ===" -ForegroundColor Yellow
+        }
+    }
+
+    # Save the updated TVDB cache
+    if ($TVDBCache.Count -gt 0) {
+        try {
+            $TVDBCache | ConvertTo-Json -Depth 10 | Out-File -FilePath $CacheFile -Encoding UTF8
+            Write-Host "Updated TVDB cache saved to $CacheFile" -ForegroundColor Gray
+        }
+        catch {
+            Write-Warning "Failed to save TVDB cache: $($_.Exception.Message)"
         }
     }
 
