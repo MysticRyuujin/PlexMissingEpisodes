@@ -87,7 +87,12 @@ $CacheFile = Join-Path $PSScriptRoot "tvdb_cache.json"
 $TVDBCache = @{ }
 if (Test-Path $CacheFile) {
     try {
-        $TVDBCache = Get-Content $CacheFile -Raw | ConvertFrom-Json -AsHashtable
+        # ConvertFrom-Json -AsHashtable requires PowerShell 6+. Build the
+        # top-level lookup explicitly so caching also works on PowerShell 5.1.
+        $CacheData = Get-Content $CacheFile -Raw | ConvertFrom-Json
+        foreach ($CacheProperty in $CacheData.PSObject.Properties) {
+            $TVDBCache[$CacheProperty.Name] = $CacheProperty.Value
+        }
         Write-Host "Loaded TVDB cache from $CacheFile" -ForegroundColor Gray
     }
     catch {
@@ -131,6 +136,26 @@ function Get-EpisodeNumbers {
     }
     
     return $Episodes
+}
+
+# Normalize Plex and TVDB dates before comparing them. Plex normally returns
+# yyyy-MM-dd strings, but XML deserialization can produce DateTime values.
+function Get-NormalizedAiredDate {
+    param($DateValue)
+
+    if (-not $DateValue) { return $null }
+
+    $DateText = [string]$DateValue
+    if ($DateText -match '^(\d{4}-\d{2}-\d{2})') {
+        return $matches[1]
+    }
+
+    try {
+        return ([datetime]$DateValue).ToString('yyyy-MM-dd')
+    }
+    catch {
+        return $null
+    }
 }
 
 # Function to ensure console stays open when run directly
@@ -379,47 +404,62 @@ try {
             ForEach ($Episode in $Episodes) {
                 # Try to determine episode numbers and aired date
                 $EpisodeNumbers = @()
+                $FilenameEpisodeNumbers = @()
+                $FileNames = @()
                 $AiredDate = if ($Episode.originallyAvailableAt) { $Episode.originallyAvailableAt } else { $null }
-                
-                # 1. Use Plex Index if available
-                if ($Episode.index) {
-                    $EpisodeNumbers += [int]$Episode.index
-                }
-                
-                # 2. Try to extract from filename if index is missing or potentially incorrect
+
+                # 1. Inspect every media filename for episode ranges and dates.
                 if ($Episode.Media -and $Episode.Media.Part -and $Episode.Media.Part.file) {
-                    $FileName = [System.IO.Path]::GetFileNameWithoutExtension($Episode.Media.Part.file)
-                    $FileEpNumbers = Get-EpisodeNumbers -EpisodeString $FileName
-                    
-                    if ($FileEpNumbers.Count -gt 0) {
-                        # If Plex gave us an index, but filename has a different one, or ranges...
-                        # For now, we'll favor filename if Plex index is missing
-                        if ($EpisodeNumbers.Count -eq 0) {
-                            $EpisodeNumbers = $FileEpNumbers
+                    foreach ($MediaPart in @($Episode.Media.Part)) {
+                        if ($MediaPart.file) {
+                            $FileName = [System.IO.Path]::GetFileNameWithoutExtension([string]$MediaPart.file)
+                            $FileNames += $FileName
+                            $FilenameEpisodeNumbers += @(Get-EpisodeNumbers -EpisodeString $FileName)
+
+                            # Try to extract date from filename if missing from Plex metadata
+                            if (!$AiredDate -and $FileName -match '(\d{4}[-\.]\d{2}[-\.]\d{2})') {
+                                $AiredDate = $matches[1] -replace '\.', '-'
+                            }
                         }
                     }
-                    
-                    # Try to extract date from filename if missing from Plex metadata
-                    if (!$AiredDate -and $FileName -match '(\d{4}[-\.]\d{2}[-\.]\d{2})') {
-                        $AiredDate = $matches[1] -replace '\.', '-'
-                    }
+
+                    $FilenameEpisodeNumbers = @($FilenameEpisodeNumbers | Sort-Object -Unique)
                 }
-                
-                # 3. Try to extract from title if still no numbers
+
+                # A filename range describes every episode in the file. Otherwise,
+                # prefer Plex's index and use a single filename number as fallback.
+                if ($FilenameEpisodeNumbers.Count -gt 1) {
+                    $EpisodeNumbers = $FilenameEpisodeNumbers
+                }
+                elseif ($Episode.index) {
+                    $EpisodeNumbers = @([int]$Episode.index)
+                }
+                elseif ($FilenameEpisodeNumbers.Count -eq 1) {
+                    $EpisodeNumbers = $FilenameEpisodeNumbers
+                }
+
+                # 2. Try to extract from title if still no numbers
                 if ($EpisodeNumbers.Count -eq 0 -and $Episode.title) {
                     $EpisodeNumbers = Get-EpisodeNumbers -EpisodeString $Episode.title
                 }
 
-                # 4. Handle specific case for daily shows: Year in parentIndex + Month-Day in title/filename
+                # 3. Handle daily shows: Year in parentIndex + Month-Day in title/filename
                 if (!$AiredDate -and $Episode.parentIndex -gt 1900) {
                     if ($Episode.title -match '(\d{2})[-\.](\d{2})') {
                         $AiredDate = "$($Episode.parentIndex)-$($matches[1])-$($matches[2])"
                     }
-                    elseif ($Episode.Media -and $Episode.Media.Part -and $Episode.Media.Part.file) {
-                        if ($FileName -match '(\d{2})[-\.](\d{2})') {
-                            $AiredDate = "$($Episode.parentIndex)-$($matches[1])-$($matches[2])"
+                    else {
+                        foreach ($FileName in $FileNames) {
+                            if ($FileName -match '(\d{2})[-\.](\d{2})') {
+                                $AiredDate = "$($Episode.parentIndex)-$($matches[1])-$($matches[2])"
+                                break
+                            }
                         }
                     }
+                }
+
+                if ($AiredDate) {
+                    $AiredDate = Get-NormalizedAiredDate -DateValue $AiredDate
                 }
 
                 # Check if we still have nothing
@@ -546,29 +586,43 @@ try {
                 
                 # Safe season check
                 $seasonKey = [int]$Episode.seasonNumber
+                $TVDBAiredDate = Get-NormalizedAiredDate -DateValue $Episode.aired
                 if ($null -ne $PlexShows[$GUID]["seasons"] -and $PlexShows[$GUID]["seasons"].ContainsKey($seasonKey)) {
                     $PlexSeasonData = $PlexShows[$GUID]["seasons"][$seasonKey]
                     
-                    # Check if episode is missing by number, date, or name
+                    # Check if episode is missing by date, number, or name
                     $EpisodeFound = $false
                     
                     if ($null -ne $PlexSeasonData) {
+                        # Date is authoritative for year-based daily-show seasons.
                         foreach ($episodeRecord in $PlexSeasonData) {
-                            if ($null -ne $episodeRecord) {
-                                # 1. Match by episode number
-                                if ($episodeRecord.numbers -and $episodeRecord.numbers -contains [int]$Episode.number) {
+                            if ($null -ne $episodeRecord -and $episodeRecord.date -and $TVDBAiredDate) {
+                                $PlexAiredDate = Get-NormalizedAiredDate -DateValue $episodeRecord.date
+                                if ($PlexAiredDate -eq $TVDBAiredDate) {
                                     $EpisodeFound = $true
                                     break
                                 }
-                                
-                                # 2. Match by aired date (crucial for daily shows like Jeopardy!)
-                                if ($episodeRecord.date -and $Episode.aired -and $episodeRecord.date.ToString().StartsWith($Episode.aired)) {
-                                    $EpisodeFound = $true
-                                    break
+                            }
+                        }
+
+                        # For year-based seasons, reject number collisions when both
+                        # records have different dates. Missing dates may still fall
+                        # back to the episode number.
+                        if (!$EpisodeFound) {
+                            foreach ($episodeRecord in $PlexSeasonData) {
+                                if ($null -ne $episodeRecord -and $episodeRecord.numbers -and $episodeRecord.numbers -contains [int]$Episode.number) {
+                                    $PlexAiredDate = Get-NormalizedAiredDate -DateValue $episodeRecord.date
+                                    if ($seasonKey -le 1900 -or !$TVDBAiredDate -or !$PlexAiredDate) {
+                                        $EpisodeFound = $true
+                                        break
+                                    }
                                 }
-                                
-                                # 3. Match by name
-                                if ($episodeRecord.title -and $Episode.name -and $episodeRecord.title -eq $Episode.name) {
+                            }
+                        }
+
+                        if (!$EpisodeFound) {
+                            foreach ($episodeRecord in $PlexSeasonData) {
+                                if ($null -ne $episodeRecord -and $episodeRecord.title -and $Episode.name -and $episodeRecord.title -eq $Episode.name) {
                                     $EpisodeFound = $true
                                     break
                                 }
